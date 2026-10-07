@@ -1,0 +1,12 @@
+{
+  "name": "VitalApp · Diario Vitale",
+  "short_name": "VitalApp",
+  "description": "Parametri, abitudini e umore in una scheda al giorno.",
+  "lang": "it",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#FAF6F5",
+  "theme_color": "#C81E28",
+  "icons": [{ "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
