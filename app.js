@@ -12,6 +12,8 @@ const pad = n => String(n).padStart(2, '0');
 const keyOf = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const parseKey = k => { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d, 12); };
 const title = k => { const d = parseKey(k); return `${DF[d.getDay()]} ${d.getDate()} ${MF[d.getMonth()]}`; };
+const esc = s => String(s).replace(/[&<>"']/g, c => '&#' + c.charCodeAt(0) + ';');
+const addDays = (k, n) => { const d = parseKey(k); d.setDate(d.getDate() + n); return keyOf(d); };
 const has = v => v !== null && v !== undefined && v !== '' && !isNaN(v);
 
 function rng(seed) { let s = seed; return () => { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; }; }
@@ -34,7 +36,7 @@ const METRICS = [
   { key: 'bp', label: 'Pressione', unit: 'mmHg', min: 80, max: 190, band: [90, 139], get: x => x.sys, ref: 'ESH · ottimale sotto 120/80, ipertensione da 140/90', bandLabel: 'Sistolica 90–139 mmHg' },
   { key: 'hr', label: 'Battito a riposo', tab: 'Battito', unit: 'bpm', min: 40, max: 120, band: [60, 100], get: x => x.hr, ref: 'Fascia di riferimento 60–100 bpm', bandLabel: 'Fascia 60–100 bpm' },
   { key: 'sleep', label: 'Sonno', unit: 'ore', min: 0, max: 11, band: [7, 9], get: x => x.sleep, ref: 'Fascia di riferimento 7–9 ore', bandLabel: 'Fascia 7–9 ore' },
-  { key: 'act', label: 'Attività fisica', tab: 'Attività', unit: 'min', min: 0, max: 80, band: [150 / 7, 80], get: x => x.act, ref: 'OMS · 150 minuti a settimana', bandLabel: '≈ 22 min al giorno (150 a settimana)' }];
+  { key: 'act', label: 'Attività fisica', tab: 'Attività', unit: 'min', min: 0, max: 80, band: [150 / 7, Infinity], get: x => x.act, ref: 'OMS · 150 minuti a settimana', bandLabel: '≈ 22 min al giorno (150 a settimana)' }];
 const FIELDS = [
   { k: 'sys', label: 'Sistolica', unit: 'mmHg', min: 70, max: 250, step: 1 },
   { k: 'dia', label: 'Diastolica', unit: 'mmHg', min: 40, max: 150, step: 1 },
@@ -54,10 +56,10 @@ function load() {
 function persist() { try { localStorage.setItem(STORE, JSON.stringify({ days: S.days, sample: S.sample })); } catch (e) {} }
 const sortDays = () => S.days.sort((a, b) => a.date < b.date ? -1 : 1);
 let toastT;
-function toast(m) { S.toast = m; clearTimeout(toastT); toastT = setTimeout(() => { S.toast = ''; render(); }, 2800); }
+function toast(m) { S.toast = m; clearTimeout(toastT); toastT = setTimeout(() => { S.toast = ''; const el = app.querySelector('.toast'); if (el) el.remove(); }, 2800); }
 
 /* ---------- logica ---------- */
-const weekAct = i => { let t = 0; for (let j = Math.max(0, i - 6); j <= i; j++) t += S.days[j].act || 0; return t; };
+const weekAct = i => { const end = S.days[i].date, from = addDays(end, -6); let t = 0; for (let j = i; j >= 0 && S.days[j].date >= from; j--) t += S.days[j].act || 0; return t; };
 function status(m, i) {
   const x = S.days[i];
   if (m.key === 'bp') { if (!has(x.sys) || !has(x.dia)) return { ok: null, text: 'Nessun dato' }; const e = esh(x.sys, x.dia); return { ok: e.ok, text: e.label }; }
@@ -103,11 +105,18 @@ const ALIAS = {
   dia: ['dia', 'diastolica', 'diastolic', 'bloodpressurediastolic']
 };
 const norm = s => String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z]/g, '');
+const EXCL = /variab|max|zon|qualit|score|min(?!ut)|avg|medi/;
+function mapHeaders(hs) {
+  const out = hs.map(h => { const n = norm(h); for (const k in ALIAS) if (ALIAS[k].includes(n)) return k; return null; });
+  hs.forEach((h, i) => { if (out[i]) return; const n = norm(h); if (EXCL.test(n)) return; const k = colOf(h); if (k && !out.includes(k)) out[i] = k; });
+  return out;
+}
 function colOf(h) { const n = norm(h); for (const k in ALIAS) if (ALIAS[k].includes(n)) return k; for (const k in ALIAS) if (k !== 'date' && ALIAS[k].some(a => a.length > 3 && n.includes(a))) return k; return null; }
 function toKey(s) {
   s = String(s).trim(); let m;
-  if ((m = s.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/))) return `${m[1]}-${pad(+m[2])}-${pad(+m[3])}`;
-  if ((m = s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})/))) return `${m[3]}-${pad(+m[2])}-${pad(+m[1])}`;
+  const valid = (y, mo, d) => { const t = new Date(y, mo - 1, d, 12); return t.getFullYear() === +y && t.getMonth() === mo - 1 && t.getDate() === +d ? `${y}-${pad(mo)}-${pad(d)}` : null; };
+  if ((m = s.match(/^(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/))) return valid(+m[1], +m[2], +m[3]);
+  if ((m = s.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})/))) return valid(+m[3], +m[2], +m[1]);
   if (/^\d{10,13}$/.test(s)) { const n = +s; return keyOf(new Date(n < 1e12 ? n * 1000 : n)); }
   return null;
 }
@@ -136,12 +145,12 @@ function parseRows(objs) { // oggetti con chiavi già normalizzate (date,hr,slee
 }
 function parseCsv(text) {
   const rows = splitCsv(text); if (rows.length < 2) return {};
-  const cols = rows[0].map(colOf); if (!cols.includes('date')) return {};
+  const cols = mapHeaders(rows[0]); if (!cols.includes('date')) return {};
   return parseRows(rows.slice(1).map(r => { const o = {}; cols.forEach((c, i) => { if (c && !(c in o)) o[c] = r[i]; }); return o; }));
 }
 function parseJson(text) {
   let j = JSON.parse(text); if (!Array.isArray(j)) j = j.days || j.data || j.records || [];
-  return parseRows(j.map(x => { const o = {}; for (const k in x) { const c = colOf(k); if (c && !(c in o)) o[c] = x[k]; } return o; }));
+  return parseRows(j.map(x => { const o = {}, ks = Object.keys(x), cs = mapHeaders(ks); ks.forEach((k, i) => { if (cs[i] && !(cs[i] in o)) o[cs[i]] = x[k]; }); return o; }));
 }
 function parseAppleHealth(text) {
   const map = {}, re = /<Record\b([^>]*?)\/?>/g; let m;
@@ -168,6 +177,7 @@ function parseAny(text) {
 function mergeImport(map) {
   const fmin = Object.fromEntries(FIELDS.map(f => [f.k, f]));
   let days = 0, values = 0, skipped = 0; const ds = Object.values(map).sort((a, b) => a.date < b.date ? -1 : 1);
+  const backup = S.days, wasSample = S.sample;
   if (S.sample) { S.days = []; S.sample = false; }
   ds.forEach(d => {
     if (d.sleep > 24) d.sleep = d.sleep / 60; // minuti → ore
@@ -175,6 +185,8 @@ function mergeImport(map) {
     if (has(d.act)) d.act = Math.round(d.act);
     if (has(d.hr)) d.hr = Math.round(d.hr);
     let e = S.days.find(x => x.date === d.date), add = 0;
+    const ns = has(d.sys) ? d.sys : e && e.sys, nd = has(d.dia) ? d.dia : e && e.dia;
+    if ((has(d.sys) || has(d.dia)) && has(ns) && has(nd) && nd >= ns) { skipped += 2; delete d.sys; delete d.dia; }
     FIELDS.forEach(f => {
       const v = d[f.k]; if (!has(v)) return;
       if (v < f.min || v > f.max) { skipped++; return; }
@@ -182,6 +194,7 @@ function mergeImport(map) {
     });
     if (add) { days++; values += add; }
   });
+  if (!days) { S.days = backup; S.sample = wasSample; return { days, values, skipped }; }
   sortDays(); persist(); return { days, values, skipped };
 }
 async function importText(text, label) {
@@ -226,7 +239,7 @@ async function measureHr() {
 const btn = (cls, act, label, extra = '') => `<button class="${cls}" data-a="${act}" ${extra}>${label}</button>`;
 function view() {
   const days = S.days, n = days.length, sel = Math.max(0, Math.min(S.sel, n - 1)), d = days[sel], todayK = keyOf(new Date());
-  const start = Math.max(0, n - S.period), vis = days.slice(start);
+  const cut = n ? addDays(days[n - 1].date, -(S.period - 1)) : '', fi = days.findIndex(x => x.date >= cut), start = fi < 0 ? n : fi, vis = days.slice(start);
   const strip = vis.map((x, k) => {
     const i = start + k, on = i === sel, out = METRICS.some(m => status(m, i).ok === false), dt = parseKey(x.date);
     return `<button class="day glass${out ? ' out' : ''}" data-a="sel" data-i="${i}" ${on ? 'aria-current="date"' : ''} aria-label="${title(x.date)}${out ? ', con valori fuori fascia' : ''}"><small>${DS[dt.getDay()]}</small><b>${dt.getDate()}</b><em></em></button>`;
@@ -240,17 +253,17 @@ function view() {
   }
   const t = d ? `${d.date === todayK ? 'Oggi' : 'Scheda del'}${S.sample ? ' · esempio' : ''}` : 'Nessuna scheda';
   return `<div class="wrap"><div class="blobs" aria-hidden="true"><i></i><i></i></div>
-<header class="top"><i class="o" aria-hidden="true" style="width:280px;height:280px;background:rgba(255,255,255,.16);right:6%;top:-90px"></i><i class="o" aria-hidden="true" style="width:180px;height:180px;background:rgba(255,255,255,.12);left:38%;bottom:-70px"></i><i class="o" aria-hidden="true" style="width:90px;height:90px;background:rgba(120,0,10,.35);right:30%;top:120px"></i>
+<header class="top" ${S.sheet || S.sync ? 'inert' : ''}><i class="o" aria-hidden="true" style="width:280px;height:280px;background:rgba(255,255,255,.16);right:6%;top:-90px"></i><i class="o" aria-hidden="true" style="width:180px;height:180px;background:rgba(255,255,255,.12);left:38%;bottom:-70px"></i><i class="o" aria-hidden="true" style="width:90px;height:90px;background:rgba(120,0,10,.35);right:30%;top:120px"></i>
 <div class="in"><div class="row"><div class="brand"><div class="logo" aria-hidden="true"><i></i><i></i></div>VitalApp</div>
 <div class="row" style="gap:10px"><button class="pill" data-a="sync">⌚ Smartwatch</button><div class="seg" role="group" aria-label="Periodo"><span>Periodo</span>${[7, 14, 30].map(p => `<button class="pill" data-a="period" data-p="${p}" aria-pressed="${S.period === p}">${p} gg</button>`).join('')}</div></div></div>
 <h1 class="hello">Ciao, Andrea</h1>
 <div class="row" style="align-items:flex-end"><div><span class="kick">${t}</span><span class="dtitle" aria-live="polite">${d ? title(d.date) : 'Inizia il tuo diario'}</span></div>
 <div class="arrows"><button class="arrow" data-a="prev" aria-label="Giorno precedente" ${!d || sel <= 0 ? 'disabled' : ''}>‹</button><button class="arrow" data-a="next" aria-label="Giorno successivo" ${!d || sel >= n - 1 ? 'disabled' : ''}>›</button></div></div>
-<div class="strip" role="list" aria-label="Giorni del periodo">${strip}</div></div></header>
-<main>${main}
+<div class="strip" aria-label="Giorni del periodo">${strip}</div></div></header>
+<main ${S.sheet || S.sync ? 'inert' : ''}>${main}
 <footer><p>Le fasce di riferimento sono indicative e valgono per adulti: pressione secondo la classificazione ESH, battito a riposo 60–100 bpm, 7–9 ore di sonno, 150 minuti di attività a settimana (OMS). <strong>Questo diario non fa diagnosi:</strong> se un valore fuori norma si ripete, parlane con il tuo medico. I dati restano sul tuo dispositivo.</p></footer></main>
-<button class="fab" data-a="open"><i aria-hidden="true">+</i>Registra oggi</button>
-${S.toast ? `<div class="toast" role="status">${S.toast}</div>` : ''}${S.sheet ? sheet() : ''}${S.sync ? syncDlg() : ''}</div>`;
+<button class="fab" data-a="open" ${S.sheet || S.sync ? 'inert' : ''}><i aria-hidden="true">+</i>Registra oggi</button>
+${S.toast ? `<div class="toast" role="status" aria-live="polite">${esc(S.toast)}</div>` : ''}${S.sheet ? sheet() : ''}${S.sync ? syncDlg() : ''}</div>`;
 }
 function cards(sel, d) {
   let ok = 0;
@@ -277,17 +290,17 @@ function trend(start, vis, sel) {
     return `<button class="b${ok ? '' : ' out'}${on ? ' on' : ''}" data-a="sel" data-i="${i}" style="height:${has(m.get(x)) ? pct(m.get(x)) : 3}%" aria-label="${title(x.date)}: ${v} ${m.unit}${ok ? '' : ', fuori fascia'}"><span>${on ? v : ''}</span></button>`;
   }).join('');
   const labs = vis.map((x, k) => { const dt = parseKey(x.date); return `<span>${(k % every === 0 || start + k === sel) ? (S.period <= 7 ? DS[dt.getDay()] : dt.getDate()) : ''}</span>`; }).join('');
-  const withV = vis.filter(x => has(m.get(x)));
+  const withV = vis.filter(x => m.key === 'bp' ? has(x.sys) : has(m.get(x)));
   let mean = '–', inR = '–';
   if (withV.length) {
     const avg = f => withV.reduce((a, x) => a + f(x), 0) / withV.length;
-    mean = m.key === 'bp' ? `${Math.round(avg(x => x.sys))}/${Math.round(avg(x => x.dia))}` : fmt(avg(m.get)); inR = `${vis.filter(x => dailyOk(m, x)).length} su ${vis.length}`;
+    mean = m.key === 'bp' ? (() => { const a = vis.filter(x => has(x.sys)), b = vis.filter(x => has(x.dia)); return a.length && b.length ? `${Math.round(a.reduce((t, x) => t + x.sys, 0) / a.length)}/${Math.round(b.reduce((t, x) => t + x.dia, 0) / b.length)}` : '–'; })() : fmt(avg(m.get)); inR = `${vis.filter(x => dailyOk(m, x)).length} su ${vis.length}`;
   }
   const hi = Math.min(m.band[1], m.max);
   return `<section class="trend" aria-labelledby="tt"><div class="row"><h2 id="tt">${m.label} · ultimi ${S.period} giorni</h2>
 <div class="tabs" role="group" aria-label="Parametro del grafico">${METRICS.map(x => `<button class="tab" data-a="metric" data-m="${x.key}" aria-pressed="${x.key === S.metric}">${x.tab || x.label}</button>`).join('')}</div></div>
 <div class="stats"><div><span>Media</span><b>${mean} <small>${m.unit}</small></b></div><div><span>Giorni in fascia</span><b>${inR}</b></div></div>
-<div class="chart" role="img" aria-label="Grafico ${m.label}, media ${mean}, giorni in fascia ${inR}" style="gap:${gap}"><div class="band" aria-hidden="true" style="top:${(m.max - hi) / span * 100}%;height:${(hi - m.band[0]) / span * 100}%"></div>${bars}</div>
+<div class="chart" role="group" aria-label="Grafico ${m.label}, media ${mean}, giorni in fascia ${inR}" style="gap:${gap}"><div class="band" aria-hidden="true" style="top:${(m.max - hi) / span * 100}%;height:${(hi - m.band[0]) / span * 100}%"></div>${bars}</div>
 <div class="labs" aria-hidden="true" style="gap:${gap}">${labs}</div>
 <div class="legend"><span><i></i>In fascia</span><span><i class="o"></i>Fuori fascia (tratteggiato)</span><span><i class="l"></i>${m.bandLabel}</span></div></section>`;
 }
@@ -296,11 +309,11 @@ function sheet() {
   const fields = FIELDS.map(c => { const err = S.errors[c.k] || '';
     return `<div class="f"><label for="f-${c.k}">${c.label} <span>· ${c.unit}</span></label><div class="c">
 <button class="step" data-a="dec" data-k="${c.k}" aria-label="Diminuisci ${c.label}">−</button>
-<input id="f-${c.k}" data-fk="f-${c.k}" data-k="${c.k}" type="number" inputmode="decimal" value="${f[c.k] ?? ''}" min="${c.min}" max="${c.max}" step="${c.step}" aria-invalid="${!!err}">
-<button class="step" data-a="inc" data-k="${c.k}" aria-label="Aumenta ${c.label}">+</button></div><span class="e">${err}</span></div>`; }).join('');
+<input id="f-${c.k}" data-fk="f-${c.k}" data-k="${c.k}" type="number" inputmode="decimal" value="${f[c.k] ?? ''}" min="${c.min}" max="${c.max}" step="${c.step}" aria-invalid="${!!err}" ${err ? `aria-describedby="e-${c.k}"` : ''}>
+<button class="step" data-a="inc" data-k="${c.k}" aria-label="Aumenta ${c.label}">+</button></div><span class="e" id="e-${c.k}" role="alert">${err}</span></div>`; }).join('');
   const moods = MOODS.map((l, i) => `<button class="opt" data-a="mood" data-v="${i + 1}" aria-pressed="${f.mood === i + 1}">${l}</button>`).join('');
   const habs = HABITS.map(([k, l]) => `<button class="opt" data-a="habit" data-k="${k}" aria-pressed="${!!f[k]}"><span aria-hidden="true">${f[k] ? '✓' : '+'}</span>${l}</button>`).join('');
-  return `<div class="ov" data-a="close-bg"><div class="dlg" role="dialog" aria-modal="true" aria-labelledby="sh">
+  return `<div class="ov" data-a="close-bg"><div class="dlg" role="dialog" aria-modal="true" aria-labelledby="sh" tabindex="-1">
 <div class="row" style="flex-wrap:nowrap"><div><span class="sub">${title(keyOf(new Date()))}</span><h2 id="sh">Scheda di oggi</h2></div><button class="x" data-a="close" aria-label="Chiudi">✕</button></div>
 <div class="fgrid">${fields}</div>
 <fieldset><legend>Come ti senti?</legend><div class="opts">${moods}</div></fieldset>
@@ -308,7 +321,7 @@ function sheet() {
 <div class="foot">${btn('btn lg', 'close', 'Annulla')}${btn('btn pri lg', 'save', 'Salva scheda')}</div></div></div>`;
 }
 function syncDlg() {
-  return `<div class="ov" data-a="close-bg"><div class="dlg" role="dialog" aria-modal="true" aria-labelledby="sy">
+  return `<div class="ov" data-a="close-bg"><div class="dlg" role="dialog" aria-modal="true" aria-labelledby="sy" tabindex="-1">
 <div class="row" style="flex-wrap:nowrap"><div><span class="sub">FitPolo iDW28 · VeryFit</span><h2 id="sy">Sincronizza smartwatch</h2></div><button class="x" data-a="close" aria-label="Chiudi">✕</button></div>
 <p class="sm" style="margin:0">Il watch iDW28 si sincronizza solo con l'app VeryFit, che non offre un collegamento diretto a una webapp. Ci sono tre strade, tutte sul tuo dispositivo, senza account né cloud.</p>
 <div class="watch"><h3>1 · Importa un file di dati</h3>
@@ -316,29 +329,36 @@ function syncDlg() {
 <li><strong>iPhone:</strong> app Salute → tua foto → <em>Esporta tutti i dati</em>, decomprimi lo zip e scegli <code>export.xml</code> qui sotto.</li>
 <li><strong>Android / altri:</strong> esporta i dati in CSV (da VeryFit, se disponibile, o con un'app come Health Sync) e scegli il file.</li></ol>
 <p class="sm" style="margin:0">Formati letti: CSV, JSON, Apple Health <code>export.xml</code>. Colonne riconosciute: data, battito, sonno, attività, sistolica, diastolica. Vengono aggiornati solo i campi presenti.</p>
-<div class="btns"><label class="btn lg pri" style="display:inline-flex;align-items:center;cursor:pointer" tabindex="0">Scegli file<input type="file" id="file" accept=".csv,.json,.xml,.txt,text/csv,application/json,text/xml" hidden></label></div></div>
+<div class="btns"><button class="btn lg pri" data-a="pick">Scegli file</button><input type="file" id="file" accept=".csv,.json,.xml,.txt,text/csv,application/json,text/xml" hidden></div></div>
 <div class="watch"><h3>2 · Incolla i dati</h3><textarea class="paste" id="paste" aria-label="Dati incollati" placeholder="data,battito,sonno,attività&#10;2026-10-05,62,7.5,35"></textarea><div class="btns">${btn('btn', 'paste', 'Importa testo incollato')}</div></div>
 <div class="watch"><h3>3 · Battito via Bluetooth</h3><p class="sm" style="margin:0">Legge il battito se il watch espone il servizio standard "Heart Rate". Molti watch lo fanno solo se non sono collegati a VeryFit: chiudi l'app, attiva sul watch la schermata battito e avvia la misura (25 secondi, da fermo). Richiede Chrome/Edge.</p>
-<div class="btns">${btn('btn', 'bt', 'Misura ora', S.busy ? 'disabled' : '')}</div>${S.busy ? `<div class="imp" role="status">${S.busy}</div>` : ''}</div>
-${S.syncMsg ? `<div class="imp" role="status">${S.syncMsg}</div>` : ''}
+<div class="btns">${btn('btn', 'bt', 'Misura ora', S.busy ? 'disabled' : '')}</div>${S.busy ? `<div class="imp" role="status">${esc(S.busy)}</div>` : ''}</div>
+${S.syncMsg ? `<div class="imp" role="status">${esc(S.syncMsg)}</div>` : ''}
 <div class="foot">${btn('btn', 'export', 'Esporta i miei dati (CSV)')}${btn('btn pri lg', 'close', 'Fatto')}</div></div></div>`;
 }
 
 /* ---------- eventi ---------- */
 const app = document.getElementById('app');
+const sig = el => ['a', 'i', 'p', 'm', 'k', 'v'].map(x => el.dataset[x] || '').join('|');
 function render() {
-  const a = document.activeElement, fk = a && a.dataset && a.dataset.fk, dl = app.querySelector('.dlg'), st = app.querySelector('.strip');
+  const a = document.activeElement, inApp = a && app.contains(a), fk = inApp && a.dataset.fk, as = inApp && a.dataset.a ? sig(a) : '', pasteOn = a && a.id === 'paste';
+  const dl = app.querySelector('.dlg'), st = app.querySelector('.strip'), hadDlg = !!dl;
   const ds = dl ? dl.scrollTop : 0, ss = st ? st.scrollLeft : 0, txt = document.getElementById('paste'), tv = txt ? txt.value : '';
   app.innerHTML = view();
   const dl2 = app.querySelector('.dlg'); if (dl2) dl2.scrollTop = ds; const st2 = app.querySelector('.strip'); if (st2) st2.scrollLeft = ss;
-  const t2 = document.getElementById('paste'); if (t2) t2.value = tv;
-  if (fk) { const e = app.querySelector(`[data-fk="${fk}"]`); if (e) e.focus(); }
+  const t2 = document.getElementById('paste'); if (t2) { t2.value = tv; if (pasteOn) t2.focus(); }
+  let target = null;
+  if (fk) target = app.querySelector(`[data-fk="${fk}"]`);
+  else if (as) target = [...app.querySelectorAll('[data-a]')].find(e => sig(e) === as && e.dataset.a === a.dataset.a && !e.disabled);
+  if (target && !(pasteOn)) target.focus();
+  else if (dl2 && !hadDlg) dl2.focus();
+  else if (!dl2 && hadDlg) { const f = app.querySelector('.fab'); if (f) f.focus(); }
 }
 const clamp = (c, n) => Math.round(Math.max(c.min, Math.min(c.max, n)) / c.step) * c.step;
 const field = k => FIELDS.find(c => c.k === k);
 app.addEventListener('click', e => {
   const t = e.target.closest('[data-a]'); if (!t) return; const a = t.dataset.a;
-  if (a === 'close-bg') { if (e.target === t) { S.sheet = S.sync = false; render(); } return; }
+  if (a === 'close-bg') { if (e.target === t && downOv) { S.sheet = S.sync = false; render(); } return; }
   const set = (k, v) => { S.form[k] = v; S.errors[k] = ''; render(); };
   const actions = {
     sel: () => { S.sel = +t.dataset.i; render(); }, period: () => { S.period = +t.dataset.p; render(); },
@@ -351,10 +371,13 @@ app.addEventListener('click', e => {
     inc: () => { const c = field(t.dataset.k); set(c.k, clamp(c, (Number(S.form[c.k]) || 0) + c.step)); },
     mood: () => set('mood', +t.dataset.v), habit: () => set(t.dataset.k, !S.form[t.dataset.k]),
     sync: () => { S.sync = true; S.syncMsg = ''; render(); },
-    paste: () => importText(document.getElementById('paste').value, 'testo incollato'), bt: measureHr, export: exportCsv
+    pick: () => document.getElementById('file').click(), paste: () => importText(document.getElementById('paste').value, 'testo incollato'), bt: measureHr, export: exportCsv
   };
   if (actions[a]) actions[a]();
 });
+app.addEventListener('input', e => { const t = e.target; if (t.dataset.k && t.type === 'number' && S.form) S.form[t.dataset.k] = t.value === '' ? '' : Number(t.value); });
+let downOv = false;
+app.addEventListener('pointerdown', e => { downOv = e.target.classList.contains('ov'); });
 app.addEventListener('change', e => {
   const t = e.target;
   if (t.id === 'file' && t.files[0]) { const f = t.files[0]; f.text().then(x => importText(x, f.name)); }
