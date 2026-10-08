@@ -2,10 +2,21 @@
 
 Parametri, abitudini e umore in una scheda al giorno. Webapp installabile (PWA), senza dipendenze né build: apri `index.html` o servi la cartella con un qualsiasi server statico (es. GitHub Pages).
 
-- **Parametri**: pressione (classificazione ESH), battito a riposo, sonno, attività (150 min/settimana, OMS). La glicemia è stata rimossa.
+- **Parametri**: pressione (classificazione ESH), battito a riposo, sonno, attività. La glicemia è stata rimossa.
+- **Attività**: obiettivo di 60 minuti il lunedì, mercoledì, giovedì e venerdì; gli altri giorni sono liberi.
 - **Umore e abitudini** facoltativi; grafico di andamento su 7/14/30 giorni.
 - **Privacy**: i dati restano nel `localStorage` del dispositivo.
 - Non fa diagnosi.
+
+## Cartella Clinica
+
+Sezione per i referti di laboratorio (sangue, urine, altro):
+
+- carichi il PDF o le foto del referto (salvati sul dispositivo, in IndexedDB) e inserisci i valori a mano, oppure li fai leggere a Claude;
+- per ogni parametro: ultimo valore, fascia di riferimento, grafico nel tempo, variazione dal referto precedente e una tendenza lineare con stima a 6 mesi (da 3 referti in su);
+- **Analisi di Claude**: legge tutti i referti insieme ai dati del diario e scrive una sintesi con cosa tenere d'occhio, andamenti e domande per il medico.
+
+Le funzioni AI usano la chiave API Anthropic dell'utente (Impostazioni AI), salvata solo sul dispositivo. Il modello predefinito è Claude Opus 5.5. Quando si usano, referti e dati del diario vengono inviati ad Anthropic. La libreria ufficiale `@anthropic-ai/sdk` è inclusa in `vendor/` (licenza in `vendor/anthropic-sdk-LICENSE`).
 
 ## Sincronizzazione con lo smartwatch FitPolo iDW28 / VeryFit
 

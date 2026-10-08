@@ -6,6 +6,8 @@ const MF = ['gennaio','febbraio','marzo','aprile','maggio','giugno','luglio','ag
 const MOODS = ['Pesante','Giù','Così così','Bene','Ottimo'];
 const HABITS = [['water','Acqua (2 litri)'],['noAlcohol','Niente alcol'],['meditate','Meditazione']];
 const STORE = 'vitalapp.v1';
+const ACT_GOAL = 60, ACT_DAYS = [1, 3, 4, 5]; // lunedì, mercoledì, giovedì, venerdì
+const isActDay = k => ACT_DAYS.includes(parseKey(k).getDay());
 
 const fmt = n => (Math.round(n * 10) / 10).toString().replace('.', ',');
 const pad = n => String(n).padStart(2, '0');
@@ -22,7 +24,7 @@ function sample() {
   for (let i = 29; i >= 0; i--) {
     const d = new Date(t); d.setDate(t.getDate() - i);
     out.push({ date: keyOf(d), sys: Math.round(112 + r() * 32), dia: Math.round(70 + r() * 21), hr: Math.round(56 + r() * 32),
-      sleep: Math.round((5.5 + r() * 3.5) * 2) / 2, act: r() < .25 ? 0 : Math.round((10 + r() * 50) / 5) * 5,
+      sleep: Math.round((5.5 + r() * 3.5) * 2) / 2, act: ACT_DAYS.includes(d.getDay()) ? Math.round((35 + r() * 45) / 5) * 5 : (r() < .5 ? 0 : Math.round((10 + r() * 30) / 5) * 5),
       mood: 1 + Math.floor(r() * 5), water: r() > .3, noAlcohol: r() > .25, meditate: r() > .5 });
   }
   return out;
@@ -36,7 +38,7 @@ const METRICS = [
   { key: 'bp', label: 'Pressione', unit: 'mmHg', min: 80, max: 190, band: [90, 139], get: x => x.sys, ref: 'ESH · ottimale sotto 120/80, ipertensione da 140/90', bandLabel: 'Sistolica 90–139 mmHg' },
   { key: 'hr', label: 'Battito a riposo', tab: 'Battito', unit: 'bpm', min: 40, max: 120, band: [60, 100], get: x => x.hr, ref: 'Fascia di riferimento 60–100 bpm', bandLabel: 'Fascia 60–100 bpm' },
   { key: 'sleep', label: 'Sonno', unit: 'ore', min: 0, max: 11, band: [7, 9], get: x => x.sleep, ref: 'Fascia di riferimento 7–9 ore', bandLabel: 'Fascia 7–9 ore' },
-  { key: 'act', label: 'Attività fisica', tab: 'Attività', unit: 'min', min: 0, max: 80, band: [150 / 7, Infinity], get: x => x.act, ref: 'OMS · 150 minuti a settimana', bandLabel: '≈ 22 min al giorno (150 a settimana)' }];
+  { key: 'act', label: 'Attività fisica', tab: 'Attività', unit: 'min', min: 0, max: 120, band: [ACT_GOAL, Infinity], get: x => x.act, ref: 'Obiettivo 60 min · lun, mer, gio, ven', bandLabel: 'Obiettivo 60 min nei giorni di allenamento' }];
 const FIELDS = [
   { k: 'sys', label: 'Sistolica', unit: 'mmHg', min: 70, max: 250, step: 1 },
   { k: 'dia', label: 'Diastolica', unit: 'mmHg', min: 40, max: 150, step: 1 },
@@ -45,7 +47,7 @@ const FIELDS = [
   { k: 'act', label: 'Attività', unit: 'min', min: 0, max: 300, step: 5 }];
 
 /* ---------- stato ---------- */
-const S = { days: [], sample: true, sel: 0, period: 7, metric: 'bp', sheet: false, sync: false, form: null, errors: {}, loading: true, toast: '', busy: '', syncMsg: '' };
+const S = { view: 'diary', days: [], sample: true, sel: 0, period: 7, metric: 'bp', sheet: false, sync: false, form: null, errors: {}, loading: true, toast: '', busy: '', syncMsg: '' };
 function load() {
   try {
     const j = JSON.parse(localStorage.getItem(STORE) || 'null');
@@ -59,17 +61,23 @@ let toastT;
 function toast(m) { S.toast = m; clearTimeout(toastT); toastT = setTimeout(() => { S.toast = ''; const el = app.querySelector('.toast'); if (el) el.remove(); }, 2800); }
 
 /* ---------- logica ---------- */
-const weekAct = i => { const end = S.days[i].date, from = addDays(end, -6); let t = 0; for (let j = i; j >= 0 && S.days[j].date >= from; j--) t += S.days[j].act || 0; return t; };
+// settimana lun–dom che contiene il giorno i: allenamenti completati sui 4 previsti
+function weekGoals(i) {
+  const k = S.days[i].date, dow = (parseKey(k).getDay() + 6) % 7, mon = addDays(k, -dow), sun = addDays(mon, 6);
+  const done = S.days.filter(x => x.date >= mon && x.date <= sun && isActDay(x.date) && x.act >= ACT_GOAL).length;
+  return { done, total: ACT_DAYS.length };
+}
 function status(m, i) {
   const x = S.days[i];
   if (m.key === 'bp') { if (!has(x.sys) || !has(x.dia)) return { ok: null, text: 'Nessun dato' }; const e = esh(x.sys, x.dia); return { ok: e.ok, text: e.label }; }
-  if (m.key === 'act') { if (!has(x.act)) return { ok: null, text: 'Nessun dato' }; const ok = weekAct(i) >= 150; return { ok, text: ok ? 'Obiettivo ok' : 'Sotto obiettivo' }; }
+  if (m.key === 'act') { if (!isActDay(x.date)) return { ok: true, text: 'Giorno libero' }; if (!has(x.act)) return { ok: null, text: 'Nessun dato' }; const ok = x.act >= ACT_GOAL; return { ok, text: ok ? 'Obiettivo ok' : 'Sotto obiettivo' }; }
   const v = m.get(x); if (!has(v)) return { ok: null, text: 'Nessun dato' };
   if (v < m.band[0]) return { ok: false, text: 'Sotto fascia' }; if (v > m.band[1]) return { ok: false, text: 'Sopra fascia' };
   return { ok: true, text: 'In fascia' };
 }
 function dailyOk(m, x) {
   if (m.key === 'bp') return has(x.sys) && has(x.dia) && esh(x.sys, x.dia).ok;
+  if (m.key === 'act' && !isActDay(x.date)) return true;
   const v = m.get(x); return has(v) && v >= m.band[0] && v <= m.band[1];
 }
 const todayEntry = () => S.days.find(d => d.date === keyOf(new Date()));
@@ -245,35 +253,38 @@ function view() {
     return `<button class="day glass${out ? ' out' : ''}" data-a="sel" data-i="${i}" ${on ? 'aria-current="date"' : ''} aria-label="${title(x.date)}${out ? ', con valori fuori fascia' : ''}"><small>${DS[dt.getDay()]}</small><b>${dt.getDate()}</b><em></em></button>`;
   }).join('');
   let main = '';
+  const clinic = S.view === 'clinic', modal = S.sheet || S.sync || !!C.dlg, ch = clinic ? clinicHeader() : null;
   if (S.loading) main = `<div class="panel" role="status"><b style="font-size:18px">Carico i tuoi dati…</b><div class="sk" style="width:60%"></div><div class="sk" style="width:40%"></div></div>`;
   else {
     if (S.sample && n) main += `<div class="banner"><p><span class="d" aria-hidden="true"></span>Stai vedendo <strong>${n}</strong> giorni di dati di esempio, inseriti per mostrarti come funziona.</p>${btn('btn', 'clear', 'Inizia con i miei dati')}</div>`;
     if (!n) main += `<div class="empty"><h2>Il tuo diario è vuoto</h2><p>Registra la prima scheda: bastano pressione, battito, sonno e attività. Umore e abitudini sono facoltativi. Puoi anche importare i dati dal tuo smartwatch.</p><div class="btns">${btn('btn pri lg', 'open', 'Registra il primo giorno')}${btn('btn lg', 'sync', 'Sincronizza smartwatch')}${btn('btn lg', 'restore', "Rivedi l'esempio")}</div></div>`;
     else main += cards(sel, d) + trend(start, vis, sel);
   }
-  const t = d ? `${d.date === todayK ? 'Oggi' : 'Scheda del'}${S.sample ? ' · esempio' : ''}` : 'Nessuna scheda';
+  if (clinic && !S.loading) main = clinicMain();
+  const t = clinic ? ch.kick : d ? `${d.date === todayK ? 'Oggi' : 'Scheda del'}${S.sample ? ' · esempio' : ''}` : 'Nessuna scheda';
   return `<div class="wrap"><div class="blobs" aria-hidden="true"><i></i><i></i></div>
-<header class="top" ${S.sheet || S.sync ? 'inert' : ''}><i class="o" aria-hidden="true" style="width:280px;height:280px;background:rgba(255,255,255,.16);right:6%;top:-90px"></i><i class="o" aria-hidden="true" style="width:180px;height:180px;background:rgba(255,255,255,.12);left:38%;bottom:-70px"></i><i class="o" aria-hidden="true" style="width:90px;height:90px;background:rgba(120,0,10,.35);right:30%;top:120px"></i>
+<header class="top" ${modal ? 'inert' : ''}><i class="o" aria-hidden="true" style="width:280px;height:280px;background:rgba(255,255,255,.16);right:6%;top:-90px"></i><i class="o" aria-hidden="true" style="width:180px;height:180px;background:rgba(255,255,255,.12);left:38%;bottom:-70px"></i><i class="o" aria-hidden="true" style="width:90px;height:90px;background:rgba(120,0,10,.35);right:30%;top:120px"></i>
 <div class="in"><div class="row"><div class="brand"><div class="logo" aria-hidden="true"><i></i><i></i></div>VitalApp</div>
-<div class="row" style="gap:10px"><button class="pill" data-a="sync">⌚ Smartwatch</button><div class="seg" role="group" aria-label="Periodo"><span>Periodo</span>${[7, 14, 30].map(p => `<button class="pill" data-a="period" data-p="${p}" aria-pressed="${S.period === p}">${p} gg</button>`).join('')}</div></div></div>
+<nav class="seg" aria-label="Sezioni"><button class="pill" data-a="view" data-p="diary" aria-pressed="${!clinic}">Diario</button><button class="pill" data-a="view" data-p="clinic" aria-pressed="${clinic}">Cartella Clinica</button></nav></div>
+${clinic ? '' : `<div class="row" style="gap:10px;justify-content:flex-start"><button class="pill" data-a="sync">⌚ Smartwatch</button><div class="seg" role="group" aria-label="Periodo"><span>Periodo</span>${[7, 14, 30].map(p => `<button class="pill" data-a="period" data-p="${p}" aria-pressed="${S.period === p}">${p} gg</button>`).join('')}</div></div>`}
 <h1 class="hello">Ciao, Andrea</h1>
-<div class="row" style="align-items:flex-end"><div><span class="kick">${t}</span><span class="dtitle" aria-live="polite">${d ? title(d.date) : 'Inizia il tuo diario'}</span></div>
-<div class="arrows"><button class="arrow" data-a="prev" aria-label="Giorno precedente" ${!d || sel <= 0 ? 'disabled' : ''}>‹</button><button class="arrow" data-a="next" aria-label="Giorno successivo" ${!d || sel >= n - 1 ? 'disabled' : ''}>›</button></div></div>
-<div class="strip" aria-label="Giorni del periodo">${strip}</div></div></header>
-<main ${S.sheet || S.sync ? 'inert' : ''}>${main}
-<footer><p>Le fasce di riferimento sono indicative e valgono per adulti: pressione secondo la classificazione ESH, battito a riposo 60–100 bpm, 7–9 ore di sonno, 150 minuti di attività a settimana (OMS). <strong>Questo diario non fa diagnosi:</strong> se un valore fuori norma si ripete, parlane con il tuo medico. I dati restano sul tuo dispositivo.</p></footer></main>
-<button class="fab" data-a="open" ${S.sheet || S.sync ? 'inert' : ''}><i aria-hidden="true">+</i>Registra oggi</button>
-${S.toast ? `<div class="toast" role="status" aria-live="polite">${esc(S.toast)}</div>` : ''}${S.sheet ? sheet() : ''}${S.sync ? syncDlg() : ''}</div>`;
+<div class="row" style="align-items:flex-end"><div><span class="kick">${t}</span><span class="dtitle${clinic ? ' plain' : ''}" aria-live="polite">${clinic ? esc(ch.title) : d ? title(d.date) : 'Inizia il tuo diario'}</span></div>
+${clinic ? '' : `<div class="arrows"><button class="arrow" data-a="prev" aria-label="Giorno precedente" ${!d || sel <= 0 ? 'disabled' : ''}>‹</button><button class="arrow" data-a="next" aria-label="Giorno successivo" ${!d || sel >= n - 1 ? 'disabled' : ''}>›</button></div>`}</div>
+${clinic ? '' : `<div class="strip" aria-label="Giorni del periodo">${strip}</div>`}</div></header>
+<main ${modal ? 'inert' : ''}>${main}
+<footer><p>Le fasce di riferimento sono indicative e valgono per adulti: pressione secondo la classificazione ESH, battito a riposo 60–100 bpm, 7–9 ore di sonno, 60 minuti di attività il lunedì, mercoledì, giovedì e venerdì. <strong>Questo diario non fa diagnosi:</strong> se un valore fuori norma si ripete, parlane con il tuo medico. I dati restano sul tuo dispositivo.</p></footer></main>
+<button class="fab" data-a="${clinic ? 'c-add' : 'open'}" ${modal ? 'inert' : ''}><i aria-hidden="true">+</i>${clinic ? 'Aggiungi esame' : 'Registra oggi'}</button>
+${S.toast ? `<div class="toast" role="status" aria-live="polite">${esc(S.toast)}</div>` : ''}${S.sheet ? sheet() : ''}${S.sync ? syncDlg() : ''}${C.dlg ? clinicDialog() : ''}</div>`;
 }
 function cards(sel, d) {
   let ok = 0;
   const cs = METRICS.map(m => {
-    const st = status(m, sel); if (st.ok) ok++; const on = S.metric === m.key, w = weekAct(sel);
+    const st = status(m, sel); if (st.ok) ok++; const on = S.metric === m.key, w = weekGoals(sel);
     const value = m.key === 'bp' ? (has(d.sys) && has(d.dia) ? `${d.sys}/${d.dia}` : '–') : (has(m.get(d)) ? fmt(m.get(d)) : '–');
     return `<button class="card" data-a="metric" data-m="${m.key}" aria-pressed="${on}" aria-label="${m.label}: ${value} ${m.unit}, ${st.text}. Mostra andamento">
 <div class="t"><span>${m.label}</span><span class="chip${st.ok === false ? ' bad' : ''}"><span aria-hidden="true">${st.ok ? '✓' : st.ok === false ? '!' : '–'}</span>${st.text}</span></div>
 <div class="val"><b>${value}</b><span>${m.unit}</span></div>
-${m.key === 'act' ? `<div><div class="bar"><i style="width:${Math.min(100, w / 150 * 100)}%"></i></div><span class="sm">Ultimi 7 giorni: ${w} di 150 min</span></div>` : ''}
+${m.key === 'act' ? `<div><div class="bar"><i style="width:${w.done / w.total * 100}%"></i></div><span class="sm">Questa settimana: ${w.done} di ${w.total} allenamenti da ${ACT_GOAL} min</span></div>` : ''}
 <span class="sm">${m.ref}</span></button>`;
   }).join('');
   const mood = d.mood ? `<div class="dots" aria-hidden="true">${[1, 2, 3, 4, 5].map(n => `<i class="${n <= d.mood ? 'on' : ''}"></i>`).join('')}</div><span class="ml">${MOODS[d.mood - 1]}</span>` : `<span class="ml">–</span>`;
@@ -287,7 +298,8 @@ function trend(start, vis, sel) {
   const every = S.period <= 14 ? 1 : 5, gap = S.period > 14 ? '4px' : '10px';
   const bars = vis.map((x, k) => {
     const i = start + k, ok = dailyOk(m, x), on = i === sel, v = valOf(x), dt = parseKey(x.date);
-    return `<button class="b${ok ? '' : ' out'}${on ? ' on' : ''}" data-a="sel" data-i="${i}" style="height:${has(m.get(x)) ? pct(m.get(x)) : 3}%" aria-label="${title(x.date)}: ${v} ${m.unit}${ok ? '' : ', fuori fascia'}"><span>${on ? v : ''}</span></button>`;
+    const rest = m.key === 'act' && !isActDay(x.date);
+    return `<button class="b${rest ? ' rest' : ok ? '' : ' out'}${on ? ' on' : ''}" data-a="sel" data-i="${i}" style="height:${has(m.get(x)) ? pct(m.get(x)) : 3}%" aria-label="${title(x.date)}: ${v} ${m.unit}${rest ? ', giorno libero' : ok ? '' : ', fuori fascia'}"><span>${on ? v : ''}</span></button>`;
   }).join('');
   const labs = vis.map((x, k) => { const dt = parseKey(x.date); return `<span>${(k % every === 0 || start + k === sel) ? (S.period <= 7 ? DS[dt.getDay()] : dt.getDate()) : ''}</span>`; }).join('');
   const withV = vis.filter(x => m.key === 'bp' ? has(x.sys) : has(m.get(x)));
@@ -302,7 +314,7 @@ function trend(start, vis, sel) {
 <div class="stats"><div><span>Media</span><b>${mean} <small>${m.unit}</small></b></div><div><span>Giorni in fascia</span><b>${inR}</b></div></div>
 <div class="chart" role="group" aria-label="Grafico ${m.label}, media ${mean}, giorni in fascia ${inR}" style="gap:${gap}"><div class="band" aria-hidden="true" style="top:${(m.max - hi) / span * 100}%;height:${(hi - m.band[0]) / span * 100}%"></div>${bars}</div>
 <div class="labs" aria-hidden="true" style="gap:${gap}">${labs}</div>
-<div class="legend"><span><i></i>In fascia</span><span><i class="o"></i>Fuori fascia (tratteggiato)</span><span><i class="l"></i>${m.bandLabel}</span></div></section>`;
+<div class="legend"><span><i></i>In fascia</span><span><i class="o"></i>Fuori fascia (tratteggiato)</span><span><i class="l"></i>${m.bandLabel}</span>${m.key === 'act' ? '<span><i class="r"></i>Giorno libero</span>' : ''}</div></section>`;
 }
 function sheet() {
   const f = S.form || {};
@@ -352,13 +364,15 @@ function render() {
   else if (as) target = [...app.querySelectorAll('[data-a]')].find(e => sig(e) === as && e.dataset.a === a.dataset.a && !e.disabled);
   if (target && !(pasteOn)) target.focus();
   else if (dl2 && !hadDlg) dl2.focus();
-  else if (!dl2 && hadDlg) { const f = app.querySelector('.fab'); if (f) f.focus(); }
+  else if (!dl2 && hadDlg && !target) { const f = app.querySelector('.fab'); if (f) f.focus(); }
 }
+function closeAll() { S.sheet = S.sync = false; C.dlg = null; C.form = null; C.busy = ''; render(); }
 const clamp = (c, n) => Math.round(Math.max(c.min, Math.min(c.max, n)) / c.step) * c.step;
 const field = k => FIELDS.find(c => c.k === k);
 app.addEventListener('click', e => {
   const t = e.target.closest('[data-a]'); if (!t) return; const a = t.dataset.a;
-  if (a === 'close-bg') { if (e.target === t && downOv) { S.sheet = S.sync = false; render(); } return; }
+  if (a === 'close-bg') { if (e.target === t && downOv) closeAll(); return; }
+  if (clinicAction(a, t)) return;
   const set = (k, v) => { S.form[k] = v; S.errors[k] = ''; render(); };
   const actions = {
     sel: () => { S.sel = +t.dataset.i; render(); }, period: () => { S.period = +t.dataset.p; render(); },
@@ -366,7 +380,8 @@ app.addEventListener('click', e => {
     metric: () => { S.metric = t.dataset.m; render(); },
     clear: () => { S.days = []; S.sample = false; S.sel = 0; persist(); render(); },
     restore: () => { S.days = sample(); S.sample = true; S.sel = S.days.length - 1; persist(); render(); },
-    open: openSheet, close: () => { S.sheet = S.sync = false; render(); }, save,
+    open: openSheet, close: closeAll, save,
+    view: () => { S.view = t.dataset.p; try { localStorage.setItem('vitalapp.view', S.view); } catch (e) {} window.scrollTo(0, 0); render(); },
     dec: () => { const c = field(t.dataset.k); set(c.k, clamp(c, (Number(S.form[c.k]) || 0) - c.step)); },
     inc: () => { const c = field(t.dataset.k); set(c.k, clamp(c, (Number(S.form[c.k]) || 0) + c.step)); },
     mood: () => set('mood', +t.dataset.v), habit: () => set(t.dataset.k, !S.form[t.dataset.k]),
@@ -375,16 +390,19 @@ app.addEventListener('click', e => {
   };
   if (actions[a]) actions[a]();
 });
-app.addEventListener('input', e => { const t = e.target; if (t.dataset.k && t.type === 'number' && S.form) S.form[t.dataset.k] = t.value === '' ? '' : Number(t.value); });
+app.addEventListener('input', e => { const t = e.target; if (clinicInput(t)) return; if (t.dataset.k && t.type === 'number' && S.form) S.form[t.dataset.k] = t.value === '' ? '' : Number(t.value); });
 let downOv = false;
 app.addEventListener('pointerdown', e => { downOv = e.target.classList.contains('ov'); });
 app.addEventListener('change', e => {
   const t = e.target;
+  if (clinicFiles(t) || clinicInput(t)) return;
   if (t.id === 'file' && t.files[0]) { const f = t.files[0]; f.text().then(x => importText(x, f.name)); }
   else if (t.dataset.k && t.type === 'number') { S.form[t.dataset.k] = t.value === '' ? '' : Number(t.value); S.errors[t.dataset.k] = ''; }
 });
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && (S.sheet || S.sync)) { S.sheet = S.sync = false; render(); } });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && (S.sheet || S.sync || C.dlg)) closeAll(); });
 
-load(); sortDays(); S.sel = S.days.length - 1; render();
+load(); sortDays(); S.sel = S.days.length - 1; clinicLoad();
+try { if (localStorage.getItem('vitalapp.view') === 'clinic' || location.hash === '#cartella') S.view = 'clinic'; } catch (e) {}
+render();
 setTimeout(() => { S.loading = false; render(); }, 600);
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
